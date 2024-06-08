@@ -1,9 +1,7 @@
 'use server';
 
 import { MongoClient } from 'mongodb';
-import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { redirect } from 'next/navigation';
 
 const validationSchema = z.object({
   name: z.string().trim().min(5).max(25),
@@ -11,14 +9,19 @@ const validationSchema = z.object({
   config: z.string().min(5).max(1023),
 });
 
+export type FormState = {
+  message: string;
+  errors: Record<string, string[]>;
+  isPending: boolean;
+};
+
 export const saveAction = async (
-  currentState: { message: string },
-  formData: FormData,
+  currentState: FormState,
+  formData: FormData, //payload
 ) => {
   // use mongo client to persist the data
   const uri = process.env.MONGODB_URI || '';
   const client = new MongoClient(uri);
-  const clientPromise = client.connect();
 
   const rawFormData = {
     name: formData.get('name'),
@@ -26,23 +29,36 @@ export const saveAction = async (
     config: formData.get('config'),
   };
 
-  try {
-    validationSchema.parse(rawFormData);
-  } catch (error) {
-    console.log(error);
+  const validationFields = validationSchema.safeParse(rawFormData);
+
+  if (!validationFields.success) {
+    console.log(validationFields.error.flatten());
     return {
-      message: 'Error validating the form data.',
+      ...currentState,
+      isPending: false,
+      errors: validationFields.error.flatten().fieldErrors,
     };
   }
 
   try {
-    clientPromise.then((client) => {
-      const collection = client.db('dev').collection('configs');
-      collection.insertOne(rawFormData);
-    });
+    const connection = await client.connect();
+    const result = await connection
+      .db('dev')
+      .collection('configs')
+      .insertOne(rawFormData);
   } catch (error) {
-    console.log(error);
+    return {
+      errors: {},
+      isPending: false,
+      message: 'An error occurred while saving the config',
+    };
   }
 
-  redirect('/');
+  // redirect('/?submition=true');
+
+  return {
+    errors: {},
+    isPending: false,
+    message: 'Config saved successfully!',
+  } as FormState;
 };
